@@ -1,0 +1,20 @@
+{
+  "zh-CN": {
+    "app.name": "安领航",
+    "app.description": "您的Android命令行智能助手",
+    "app.title": "Android命令行助手",
+    "app.welcome": "欢迎使用安领航"
+  },
+  "zh-TW": {
+    "app.name": "安領航",
+    "app.description": "您的Android命令行智能助手",
+    "app.title": "Android命令行助手",
+    "app.welcome": "歡迎使用安領航"
+  },
+  "en": {
+    "app.name": "Andropilot",
+    "app.description": "Your copilot for Android command-line.",
+    "app.title": "Android CLI Copilot",
+    "app.welcome": "Welcome to Andropilot"
+  }
+}

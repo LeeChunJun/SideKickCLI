@@ -1,0 +1,30 @@
+{
+  "app": {
+    "name": "Android CLI Copilot",
+    "version": "1.0.0",
+    "description": "Your Copilot for Android Command Line"
+  },
+  "resource": {
+    "defaultIcon": "classic",
+    "availableIcons": [
+      "classic",
+      "modern",
+      "minimal"
+    ],
+    "currentLanguage": "zh-CN",
+    "availableLanguages": [
+      "zh-CN",
+      "zh-TW",
+      "en"
+    ]
+  },
+  "workspace": {
+    "directory": "./workspace",
+    "logLabel": "INFO"
+  },
+  "cache": {
+    "directory": "./.cache",
+    "maxSize": "100MB",
+    "ttl": 86400
+  }
+}

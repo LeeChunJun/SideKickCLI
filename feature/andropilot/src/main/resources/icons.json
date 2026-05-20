@@ -1,0 +1,80 @@
+{
+  "classic": {
+    "andropilot": "🤖",
+
+    "menu.home": "🏠",
+    "menu.settings": "⚙️",
+    "menu.document": "📚",
+    "menu.help": "💡",
+
+    "action.search": "🔍",
+    "action.save": "💾",
+    "action.delete": "🗑️",
+    "action.exit": "👋",
+
+    "state.favorite": "⭐",
+    "state.loading": "⏳",
+
+    "status.success": "✅",
+    "status.error": "❌",
+    "status.warning": "⚠️",
+    "status.info": "📌",
+
+    "move.arrow_up": "⬆️",
+    "move.arrow_down": "⬇️",
+    "move.arrow_left": "⬅️",
+    "move.arrow_right": "➡️"
+  },
+  "modern": {
+    "andropilot": "🚀",
+
+    "menu.home": "💻",
+    "menu.settings": "🔧",
+    "menu.document": "📖",
+    "menu.help": "❓",
+
+    "action.search": "🔭",
+    "action.save": "📥",
+    "action.delete": "🍂",
+    "action.exit": "🦅",
+
+    "state.favorite": "💖",
+    "state.loading": "🌞",
+
+    "status.success": "🎉",
+    "status.error": "🚫",
+    "status.warning": "🌵",
+    "status.info": "ℹ️",
+
+    "move.arrow_up": "⬆️",
+    "move.arrow_down": "⬇️",
+    "move.arrow_left": "⬅️",
+    "move.arrow_right": "➡️"
+  },
+  "minimal": {
+    "andropilot": "◈",
+
+    "menu.home": "⌂",
+    "menu.settings": "≡",
+    "menu.document": "☷",
+    "menu.help": "?",
+
+    "action.search": "⌕",
+    "action.save": "⬇",
+    "action.delete": "⌫",
+    "action.exit": "⏻",
+
+    "state.favorite": "★",
+    "state.loading": "⟳",
+
+    "status.success": "✓",
+    "status.error": "✕",
+    "status.warning": "!",
+    "status.info": "i",
+
+    "move.arrow_up": "↑",
+    "move.arrow_down": "↓",
+    "move.arrow_left": "←",
+    "move.arrow_right": "→"
+  }
+}

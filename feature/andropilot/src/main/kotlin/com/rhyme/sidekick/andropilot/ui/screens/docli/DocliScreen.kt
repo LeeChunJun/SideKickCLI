@@ -15,7 +15,7 @@ import com.jakewharton.mosaic.text.buildAnnotatedString
 import com.jakewharton.mosaic.text.withStyle
 import com.jakewharton.mosaic.ui.*
 import com.rhyme.sidekick.andropilot.ui.theme.CLITheme
-import com.rhyme.sidekick.cmdx.lifecycle.common.LocalCLILifecycleOwer
+import com.rhyme.sidekick.cmdx.lifecycle.common.LocalCLILifecycleOwner
 import com.rhyme.sidekick.cmdx.navigation.simple.LocalCLINavigator
 import com.rhyme.sidekick.cmdx.viewmodel.common.cliViewModel
 import com.rhyme.sidekick.cmdx.viewmodel.core.ViewModelStore
@@ -37,7 +37,7 @@ import kotlin.system.exitProcess
  */
 @Composable
 fun DocliScreen() {
-    val lifecycleOwner = LocalCLILifecycleOwer.current
+    val lifecycleOwner = LocalCLILifecycleOwner.current
     val navigator = LocalCLINavigator.current
     val terminalState = LocalTerminalState.current
 

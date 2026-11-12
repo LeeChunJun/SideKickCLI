@@ -11,7 +11,7 @@ import com.rhyme.sidekick.cmdx.framework.CLIContext
 import com.rhyme.sidekick.cmdx.framework.LocalCLIConfig
 import com.rhyme.sidekick.cmdx.framework.LocalCLIResources
 import com.rhyme.sidekick.cmdx.framework.LocalCLIServiceManager
-import com.rhyme.sidekick.cmdx.lifecycle.common.LocalCLILifecycleOwer
+import com.rhyme.sidekick.cmdx.lifecycle.common.LocalCLILifecycleOwner
 import com.rhyme.sidekick.cmdx.navigation.simple.LocalCLINavigator
 import com.rhyme.sidekick.cmdx.room.common.LocalCLIRoomDatabase
 import com.rhyme.sidekick.cmdx.viewmodel.common.LocalCLIViewModelStoreOwner
@@ -35,7 +35,7 @@ fun CLIAndropilotRoot(
         LocalCLIPreferences provides context.preferences,
         LocalCLIRoomDatabase provides context.database,
         LocalCLINavigator provides context.navigator,
-        LocalCLILifecycleOwer provides context.lifecycleOwner,
+        LocalCLILifecycleOwner provides context.lifecycleOwner,
         LocalCLIViewModelStoreOwner provides context.viewModelStoreOwner,
         LocalCLIServiceManager provides context.serviceManager,
         content = content

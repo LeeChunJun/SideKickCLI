@@ -1,63 +1,138 @@
 package com.rhyme.sidekick.cmdx.lifecycle.runtime
 
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
+import java.lang.reflect.InvocationTargetException
 import java.lang.reflect.Method
+import java.util.Optional
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CopyOnWriteArrayList
+import kotlin.coroutines.EmptyCoroutineContext
+
+/**
+ * 非法生命周期迁移异常
+ */
+class IllegalLifecycleTransitionException(message: String) : IllegalStateException(message)
 
 /**
  * 生命周期注册表实现
  *
  * 仿照 androidx.lifecycle.LifecycleRegistry，提供生命周期的具体实现。
- * 管理观察者注册、状态转换和事件分发。
  *
- * 特性：
- * - 线程安全的状态管理
- * - 事件驱动的状态转换
- * - 观察者自动发现和通知
- * - 支持注解驱动的事件处理
+ * 与旧版实现相比修正了这些问题：
+ * - **单一锁**：状态变更、观察者集合、历史事件全部由同一把锁保护，
+ *   不再出现 `Mutex` 与 `synchronized` 两把锁互不排斥的竞态。
+ * - **迁移守卫**：非法迁移抛 [IllegalLifecycleTransitionException]，不会静默把状态写坏。
+ * - **幂等**：重复派发同一事件是空操作（返回 false），不会重复通知观察者。
+ * - **事件流不阻塞**：使用 `tryEmit` + `DROP_OLDEST`，慢消费者不会卡死状态机。
+ * - **真实历史回放**：记录实际派发过的事件，新观察者按真实顺序收到 catch-up 回调。
+ * - **反射支持继承**：`@OnLifecycleEvent` 方法在父类声明时同样可以被发现。
+ * - **观察者异常隔离**：单个观察者抛异常不会影响其它观察者，并可通过
+ *   [onObserverError] 接管异常上报。
  *
- * @param S 生命周期状态类型
+ * 线程模型：
+ * - 默认在**调用线程**同步回调观察者（与 Android 的主线程模型一致，
+ *   调用方需自行保证在 UI 线程派发）。
+ * - 传入 [observerDispatcher] 后，观察者回调会被投递到该线程执行，
+ *   适合 Compose / Mosaic 这类要求 UI 更新的场景。
+ *
+ * @param initialState 初始状态
+ * @param observerDispatcher 观察者回调线程，null 表示在调用线程同步回调
  */
-class LifecycleRegistry<S : Any>(
-    initialState: S,
-    private val initialLifecycleState: Lifecycle.State = Lifecycle.State.CREATED
-) : Lifecycle<S> {
+class LifecycleRegistry(
+    initialState: Lifecycle.State = Lifecycle.State.INITIALIZED,
+    private val observerDispatcher: CoroutineDispatcher? = null
+) : Lifecycle, LifecycleOwner {
 
-    private val mutex = Mutex()
+    /**
+     * 唯一锁：保护状态、观察者集合与历史事件
+     */
+    private val lock = Any()
 
-    // 观察者集合
-    private val observers = mutableListOf<LifecycleObserver>()
+    /**
+     * 观察者集合：写时复制，允许在回调中安全地增删观察者
+     */
+    private val observers = CopyOnWriteArrayList<LifecycleObserver>()
 
-    // 事件方法缓存，用于高效的注解方法查找
-    private val eventMethodCache = mutableMapOf<Pair<Class<*>, String>, Method?>()
+    /**
+     * 已真实派发过的事件历史，用于新观察者的 catch-up 回放
+     */
+    private val history = ArrayDeque<Lifecycle.Event>()
 
-    // 当前生命周期状态
-    private var _currentState = initialLifecycleState
+    /**
+     * 注解方法缓存：key = (观察者类型, 事件)，value = 找到的方法（可能为空）
+     */
+    private val methodCache =
+        ConcurrentHashMap<Pair<Class<*>, Lifecycle.Event>, Optional<Method>>()
 
-    // 状态流
     private val _stateFlow = MutableStateFlow(initialState)
-    override val stateFlow: StateFlow<S> = _stateFlow.asStateFlow()
+    override val stateFlow: StateFlow<Lifecycle.State> = _stateFlow.asStateFlow()
 
-    // 事件流
     private val _eventFlow = MutableSharedFlow<Lifecycle.Event>(
         replay = 0,
-        extraBufferCapacity = 64
+        extraBufferCapacity = 64,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST
     )
     override val eventFlow: Flow<Lifecycle.Event> = _eventFlow.asSharedFlow()
 
-    override fun addObserver(observer: LifecycleObserver) {
-        // 同步添加观察者并触发已有事件
-        if (observers.contains(observer)) return
+    override val lifecycle: Lifecycle
+        get() = this
 
-        observers.add(observer)
-        // 触发初始事件以使观察者跟上当前状态
-        triggerInitialEvents(observer)
+    override val currentState: Lifecycle.State
+        get() = _stateFlow.value
+
+    /**
+     * 观察者回调抛异常时的上报钩子，为 null 时输出到标准错误流
+     */
+    var onObserverError: ((observer: LifecycleObserver, event: Lifecycle.Event, error: Throwable) -> Unit)? =
+        null
+
+    override fun canDispatch(event: Lifecycle.Event): Boolean = synchronized(lock) {
+        val from = _stateFlow.value
+        if (from == event.targetState) return false
+        isLegal(from, event)
+    }
+
+    override fun dispatch(event: Lifecycle.Event): Boolean = synchronized(lock) {
+        val from = _stateFlow.value
+
+        // 幂等：已经是目标状态则什么都不做
+        if (from == event.targetState) return false
+
+        if (!isLegal(from, event)) {
+            throw IllegalLifecycleTransitionException(
+                "非法的生命周期迁移: $from -> ${event.targetState}（事件 ${event.name}）"
+            )
+        }
+
+        _stateFlow.value = event.targetState
+        history.addLast(event)
+        while (history.size > MAX_HISTORY) {
+            history.removeFirst()
+        }
+
+        // 非阻塞发射：缓冲区满时丢弃最旧事件，绝不背压卡住状态机
+        _eventFlow.tryEmit(event)
+
+        notifyObservers(event)
+        true
+    }
+
+    override fun addObserver(observer: LifecycleObserver) {
+        val replay: List<Lifecycle.Event>
+        synchronized(lock) {
+            if (observers.contains(observer)) return
+            observers.add(observer)
+            replay = history.toList()
+        }
+        // 回放真实发生过的历史事件，让新观察者跟上当前进度
+        replay.forEach { invokeObserver(observer, it) }
     }
 
     override fun removeObserver(observer: LifecycleObserver) {
@@ -69,157 +144,93 @@ class LifecycleRegistry<S : Any>(
     override fun hasObserver(observer: LifecycleObserver): Boolean = observer in observers
 
     /**
-     * 转换到新状态并触发相应事件
+     * 校验状态迁移是否合法
      */
-    suspend fun handleEvent(event: Lifecycle.Event, newState: S) {
-        mutex.withLock {
-            val targetState = event.targetState
-            _currentState = targetState
-            _stateFlow.value = newState
-
-            // 发送事件到所有观察者
-            _eventFlow.emit(event)
-            notifyObservers(event)
-        }
+    private fun isLegal(from: Lifecycle.State, event: Lifecycle.Event): Boolean = when (event) {
+        Lifecycle.Event.ON_CREATE -> from == Lifecycle.State.INITIALIZED
+        Lifecycle.Event.ON_RESUME -> from == Lifecycle.State.CREATED || from == Lifecycle.State.PAUSED
+        Lifecycle.Event.ON_PAUSE -> from == Lifecycle.State.RESUMED
+        Lifecycle.Event.ON_DESTROY -> from != Lifecycle.State.TERMINATED
     }
 
     /**
-     * 同步版本的状态转换
+     * 通知所有观察者
+     *
+     * 在锁内调用以保证事件顺序；[CopyOnWriteArrayList] 的迭代基于快照，
+     * 观察者在回调中增删观察者不会导致并发修改异常。
      */
-    fun handleEventSync(event: Lifecycle.Event, newState: S) {
-        synchronized(this) {
-            val targetState = event.targetState
-            _currentState = targetState
-            _stateFlow.value = newState
+    private fun notifyObservers(event: Lifecycle.Event) {
+        val snapshot = observers.toList()
+        if (snapshot.isEmpty()) return
 
-            // 发送事件到观察者
-            try {
-                notifyObserversSync(event)
-            } catch (e: Exception) {
-                e.printStackTrace()
+        val dispatcher = observerDispatcher
+        if (dispatcher == null) {
+            snapshot.forEach { invokeObserver(it, event) }
+        } else {
+            snapshot.forEach { observer ->
+                dispatcher.dispatch(EmptyCoroutineContext) { invokeObserver(observer, event) }
             }
         }
     }
 
     /**
-     * 获取当前状态
+     * 调用观察者的回调，支持两种方式：
+     * 1. [LifecycleEventObserver] 函数式接口
+     * 2. `@OnLifecycleEvent` 注解方式
      */
-    fun getCurrentState(): S = _stateFlow.value
-
-    /**
-     * 获取当前生命周期状态
-     */
-    override val currentState: Lifecycle.State
-        get() = _currentState
-
-    /**
-     * 检查是否处于至少某个状态
-     */
-    fun isAtLeast(state: Lifecycle.State): Boolean = _currentState.isAtLeast(state)
-
-    /**
-     * 为新添加的观察者触发初始事件
-     */
-    private fun triggerInitialEvents(observer: LifecycleObserver) {
-        // 根据当前状态，为观察者触发相应的初始事件
-        val initialEvents = when (currentState) {
-            Lifecycle.State.DESTROYED -> emptyList()
-            Lifecycle.State.CREATED -> listOf(Lifecycle.Event.ON_CREATE)
-            Lifecycle.State.STARTED -> listOf(
-                Lifecycle.Event.ON_CREATE,
-                Lifecycle.Event.ON_READY
-            )
-
-            Lifecycle.State.RESUMED -> listOf(
-                Lifecycle.Event.ON_CREATE,
-                Lifecycle.Event.ON_READY
-            )
-        }
-
-        initialEvents.forEach { event ->
-            try {
-                callObserverMethod(observer, event)
-            } catch (e: Exception) {
-                e.printStackTrace()
+    private fun invokeObserver(observer: LifecycleObserver, event: Lifecycle.Event) {
+        try {
+            if (observer is LifecycleEventObserver) {
+                observer.onStateChanged(this, event)
+            } else {
+                val method = findEventMethod(observer.javaClass, event) ?: return
+                method.isAccessible = true
+                method.invoke(observer)
             }
+        } catch (e: InvocationTargetException) {
+            reportError(observer, event, e.targetException ?: e)
+        } catch (e: Throwable) {
+            reportError(observer, event, e)
         }
     }
 
     /**
-     * 通知所有观察者（异步）
-     */
-    private suspend fun notifyObservers(event: Lifecycle.Event) {
-        observers.forEach { observer ->
-            try {
-                callObserverMethod(observer, event)
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
-        }
-    }
-
-    /**
-     * 通知所有观察者（同步）
-     */
-    private fun notifyObserversSync(event: Lifecycle.Event) {
-        observers.forEach { observer ->
-            try {
-                callObserverMethod(observer, event)
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
-        }
-    }
-
-    /**
-     * 调用观察者的方法 - 支持两种方式：
-     * 1. @OnLifecycleEvent 注解方式
-     * 2. LifecycleEventObserver 函数式接口方式
-     */
-
-    private fun callObserverMethod(observer: LifecycleObserver, event: Lifecycle.Event) {
-        // 方式 1: 如果是 LifecycleEventObserver 函数式接口，直接调用
-        if (observer is LifecycleEventObserver) {
-            try {
-                // 这里需要 LifecycleOwner，我们通过获取当前所有者来传递
-                // 为了简化，我们可以创建一个临时的 LifecycleOwner 包装器
-                val lifecycleOwner: LifecycleOwner<Any> = object : LifecycleOwner<Any> {
-                    @Suppress("UNCHECKED_CAST")
-                    override val lifecycle = this@LifecycleRegistry as Lifecycle<Any>
-                }
-                observer.onStateChanged(lifecycleOwner, event)
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
-            return
-        }
-
-        // 方式 2: 使用 @OnLifecycleEvent 注解方式
-        val observerClass = observer::class.java
-        val cacheKey = Pair(observerClass, event.name)
-
-        // 从缓存中获取方法，或者进行查找
-        val method = eventMethodCache.getOrPut(cacheKey) {
-            findEventMethod(observerClass, event)
-        }
-
-        method?.let {
-            try {
-                it.isAccessible = true
-                it.invoke(observer)
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
-        }
-    }
-
-    /**
-     * 查找观察者中标注了 @OnLifecycleEvent 的方法
+     * 查找观察者中标注了 [OnLifecycleEvent] 的方法
+     *
+     * 会沿继承链向上查找，父类声明的回调方法同样有效。
      */
     private fun findEventMethod(clazz: Class<*>, event: Lifecycle.Event): Method? {
-        return clazz.declaredMethods.find { method ->
-            val annotation = method.getAnnotation(OnLifecycleEvent::class.java)
-            annotation?.value == event.name
+        val key = clazz to event
+        methodCache[key]?.let { return it.orElse(null) }
+
+        var current: Class<*>? = clazz
+        var found: Method? = null
+        while (current != null && current != Any::class.java && found == null) {
+            found = current.declaredMethods.firstOrNull { method ->
+                method.getAnnotation(OnLifecycleEvent::class.java)?.value == event
+            }
+            current = current.superclass
         }
+
+        methodCache[key] = Optional.ofNullable(found)
+        return found
+    }
+
+    /**
+     * 上报观察者异常
+     */
+    private fun reportError(observer: LifecycleObserver, event: Lifecycle.Event, error: Throwable) {
+        val handler = onObserverError
+        if (handler != null) {
+            handler(observer, event, error)
+        } else {
+            System.err.println(
+                "[Lifecycle] 观察者 ${observer.javaClass.name} 处理 ${event.name} 失败: $error"
+            )
+        }
+    }
+
+    private companion object {
+        const val MAX_HISTORY = 64
     }
 }

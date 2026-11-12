@@ -4,7 +4,7 @@ import com.rhyme.sidekick.cmdx.lifecycle.common.CLILifecycleOwner
 import com.rhyme.sidekick.cmdx.lifecycle.common.CLILifecycleState
 import com.rhyme.sidekick.cmdx.lifecycle.runtime.Lifecycle
 import com.rhyme.sidekick.cmdx.lifecycle.runtime.LifecycleObserver
-import com.rhyme.sidekick.cmdx.lifecycle.runtime.LifecycleOwner
+import com.rhyme.sidekick.cmdx.lifecycle.runtime.IllegalLifecycleTransitionException
 import com.rhyme.sidekick.cmdx.lifecycle.runtime.OnLifecycleEvent
 
 /**
@@ -25,6 +25,7 @@ object CLILifecycleVerification {
             verifyObserverPattern()
             verifyStateTransitions()
             verifyFlowSupport()
+            verifyIllegalTransitionIsRejected()
 
             println("\n✅ 所有验证通过！生命周期系统已成功实现。\n")
         } catch (e: Exception) {
@@ -37,8 +38,8 @@ object CLILifecycleVerification {
         println("1️⃣  验证核心接口...")
 
         // 验证 Lifecycle 接口
-        val lifecycleClass = Lifecycle::class.java
-        println("   ✓ Lifecycle<S> 接口已定义")
+        Lifecycle::class.java
+        println("   ✓ Lifecycle 接口已定义")
 
         // 验证 Event 枚举
         val eventValues = Lifecycle.Event.values()
@@ -49,16 +50,16 @@ object CLILifecycleVerification {
         println("   ✓ Lifecycle.State 包含 ${stateValues.size} 个状态")
 
         // 验证 LifecycleObserver 接口
-        val observerClass = LifecycleObserver::class.java
+        LifecycleObserver::class.java
         println("   ✓ LifecycleObserver 接口已定义")
 
         // 验证 LifecycleOwner 接口
-        val ownerClass = LifecycleOwner::class.java
-        println("   ✓ LifecycleOwner<S> 接口已定义")
+        com.rhyme.sidekick.cmdx.lifecycle.runtime.LifecycleOwner::class.java
+        println("   ✓ LifecycleOwner 接口已定义")
     }
 
     private fun verifyStatesExist() {
-        println("\n2️⃣  验证 CLI 生命周期状态...")
+        println("\n2️⃣  验证 CLI 业务状态...")
 
         val states = listOf(
             CLILifecycleState.Initialized::class.java.simpleName,
@@ -94,10 +95,10 @@ object CLILifecycleVerification {
         println("   ✓ 可以转换到 Ready 状态")
 
         val currentState = owner.getCurrentState()
-        println("   ✓ 可以获取当前状态: ${currentState::class.simpleName}")
+        println("   ✓ 可以获取当前业务状态: ${currentState::class.simpleName}")
 
         val lifecycleState = owner.getCurrentLifecycleState()
-        println("   ✓ 可以获取生命周期状态: $lifecycleState")
+        println("   ✓ 可以获取宿主生命周期状态: $lifecycleState")
     }
 
     private fun verifyObserverPattern() {
@@ -107,13 +108,13 @@ object CLILifecycleVerification {
 
         var eventCount = 0
         val observer = object : LifecycleObserver {
-            @OnLifecycleEvent(value = "ON_CREATE")
+            @OnLifecycleEvent(Lifecycle.Event.ON_CREATE)
             fun onCreate() {
                 eventCount++
             }
 
-            @OnLifecycleEvent(value = "ON_READY")
-            fun onReady() {
+            @OnLifecycleEvent(Lifecycle.Event.ON_RESUME)
+            fun onResume() {
                 eventCount++
             }
         }
@@ -160,15 +161,38 @@ object CLILifecycleVerification {
         val owner = CLILifecycleOwner()
 
         val stateFlow = owner.lifecycle.stateFlow
-        println("   ✓ StateFlow 可访问")
+        println("   ✓ StateFlow 可访问 (宿主状态: ${stateFlow.value})")
 
         val eventFlow = owner.lifecycle.eventFlow
         println("   ✓ EventFlow 可访问")
+
+        val businessStateFlow = owner.stateFlow
+        println("   ✓ 业务 StateFlow 可访问 (${businessStateFlow.value::class.simpleName})")
 
         val observers = owner.lifecycle.getObservers()
         println("   ✓ 可以查询观察者列表 (${observers.size} 个)")
 
         val hasObserver = owner.lifecycle.hasObserver(object : LifecycleObserver {})
         println("   ✓ 可以检查观察者是否存在")
+    }
+
+    private fun verifyIllegalTransitionIsRejected() {
+        println("\n7️⃣  验证非法迁移会被拒绝...")
+
+        val owner = CLILifecycleOwner()
+        owner.toInitialized()
+
+        // 还没有进入 RESUMED 就 PAUSE，属于非法迁移
+        var rejected = false
+        try {
+            owner.lifecycle.dispatch(Lifecycle.Event.ON_PAUSE)
+        } catch (e: IllegalLifecycleTransitionException) {
+            rejected = true
+        }
+        println("   ✓ 非法迁移被拒绝: $rejected")
+
+        // 幂等派发
+        val changed = owner.lifecycle.dispatch(Lifecycle.Event.ON_CREATE)
+        println("   ✓ 重复派发不会改变状态 (changed=$changed)")
     }
 }

@@ -53,6 +53,7 @@ class Andropilot {
     fun main() {
         val context = createContext()
         context.lifecycleOwner.toInitialized() // 程序初始化
+        context.lifecycleOwner.toReady() // 进入可交互状态
         try {
             runMosaicBlocking(onNonInteractive = NonInteractivePolicy.Throw) {
                 CLIAndropilotRoot(context) {

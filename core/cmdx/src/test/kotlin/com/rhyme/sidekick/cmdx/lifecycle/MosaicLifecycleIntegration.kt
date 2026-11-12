@@ -21,7 +21,7 @@ object MosaicLifecycleIntegration {
         val lifecycleOwner: CLILifecycleOwner = CLILifecycleOwner(),
         val coroutineScope: CoroutineScope = CoroutineScope(Dispatchers.Default)
     ) {
-        val stateFlow: StateFlow<CLILifecycleState> = lifecycleOwner.lifecycle.stateFlow
+        val stateFlow: StateFlow<CLILifecycleState> = lifecycleOwner.stateFlow
 
         fun getCurrentState(): CLILifecycleState = lifecycleOwner.getCurrentState()
 

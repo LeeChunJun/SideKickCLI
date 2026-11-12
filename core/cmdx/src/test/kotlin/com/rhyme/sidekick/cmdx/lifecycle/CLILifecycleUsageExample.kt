@@ -1,11 +1,12 @@
 package com.rhyme.sidekick.cmdx.lifecycle
 
-import com.rhyme.sidekick.cmdx.lifecycle.runtime.observeState
+import com.rhyme.sidekick.cmdx.lifecycle.common.CLILifecycleEvent
 import com.rhyme.sidekick.cmdx.lifecycle.common.CLILifecycleOwner
 import com.rhyme.sidekick.cmdx.lifecycle.common.CLILifecycleState
+import com.rhyme.sidekick.cmdx.lifecycle.runtime.Lifecycle
 import com.rhyme.sidekick.cmdx.lifecycle.runtime.LifecycleObserver
 import com.rhyme.sidekick.cmdx.lifecycle.runtime.OnLifecycleEvent
-import com.rhyme.sidekick.cmdx.lifecycle.runtime.observeState
+import com.rhyme.sidekick.cmdx.lifecycle.runtime.observeStates
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
@@ -25,7 +26,7 @@ object CLILifecycleUsageExample {
 
         val lifecycleOwner = CLILifecycleOwner()
 
-        // 添加观察者来监听状态变化
+        // 添加观察者来监听宿主生命周期
         addStateChangeListener(lifecycleOwner)
 
         // 模拟应用生命周期流程
@@ -125,8 +126,8 @@ object CLILifecycleUsageExample {
         println("→ 用户可以重试或返回菜单\n")
 
         Thread.sleep(500)
-        lifecycleOwner.toTerminated()
-        println("→ 应用退出\n")
+        lifecycleOwner.toFailed(errorPhase = "命令执行")
+        println("→ 应用失败退出\n")
     }
 
     /**
@@ -190,16 +191,12 @@ object CLILifecycleUsageExample {
         println("→ 显示菜单\n")
 
         Thread.sleep(500)
-        lifecycleOwner.toCommandExecutionStart("test command")
-        println("→ 开始执行命令\n")
-
-        Thread.sleep(500)
         lifecycleOwner.toTerminated()
         println("→ 应用退出\n")
     }
 
     /**
-     * 示例 5：使用 Flow 观察状态变化
+     * 示例 5：使用 Flow 观察业务状态变化
      */
     suspend fun exampleFlowObservation() {
         println("=== 示例 5：使用 Flow 观察状态变化 ===\n")
@@ -207,11 +204,16 @@ object CLILifecycleUsageExample {
         val lifecycleOwner = CLILifecycleOwner()
         val coroutineScope = CoroutineScope(Dispatchers.Default)
 
-        // 监听状态变化
-        lifecycleOwner.observeState(coroutineScope) { state ->
+        // 监听业务状态
+        lifecycleOwner.observeStates(coroutineScope) { state ->
             val stateName = state::class.simpleName ?: "Unknown"
             val timestamp = state.getFormattedTimestamp()
             println("[$timestamp] 状态变化: $stateName → ${state.message}")
+        }
+
+        // 监听宿主生命周期状态
+        lifecycleOwner.lifecycle.observeStates(coroutineScope) { lifecycleState ->
+            println("🔄 宿主生命周期: $lifecycleState")
         }
 
         // 执行状态转换
@@ -226,31 +228,21 @@ object CLILifecycleUsageExample {
     }
 
     /**
-     * 添加状态变化监听器
+     * 添加宿主生命周期监听器
      */
     private fun addStateChangeListener(lifecycleOwner: CLILifecycleOwner) {
         val observer = object : LifecycleObserver {
-            @OnLifecycleEvent(value = "ON_CREATE")
+            @OnLifecycleEvent(Lifecycle.Event.ON_CREATE)
             fun onCreate() {
                 println("📍 [观察者] ON_CREATE 事件已触发")
             }
 
-            @OnLifecycleEvent(value = "ON_READY")
-            fun onReady() {
-                println("📍 [观察者] ON_READY 事件已触发")
+            @OnLifecycleEvent(Lifecycle.Event.ON_RESUME)
+            fun onResume() {
+                println("📍 [观察者] ON_RESUME 事件已触发")
             }
 
-            @OnLifecycleEvent(value = "ON_MENU_SELECTION")
-            fun onMenuSelection() {
-                println("📍 [观察者] ON_MENU_SELECTION 事件已触发")
-            }
-
-            @OnLifecycleEvent(value = "ON_COMMAND_EXECUTION_START")
-            fun onExecutionStart() {
-                println("📍 [观察者] ON_COMMAND_EXECUTION_START 事件已触发")
-            }
-
-            @OnLifecycleEvent(value = "ON_DESTROY")
+            @OnLifecycleEvent(Lifecycle.Event.ON_DESTROY)
             fun onDestroy() {
                 println("📍 [观察者] ON_DESTROY 事件已触发")
             }
@@ -264,29 +256,38 @@ object CLILifecycleUsageExample {
  */
 class MyCustomLifecycleObserver : LifecycleObserver {
 
-    @OnLifecycleEvent(value = "ON_CREATE")
+    @OnLifecycleEvent(Lifecycle.Event.ON_CREATE)
     fun onCreate() {
         println("✓ [自定义观察者] 应用已创建，初始化依赖项...")
     }
 
-    @OnLifecycleEvent(value = "ON_READY")
-    fun onReady() {
+    @OnLifecycleEvent(Lifecycle.Event.ON_RESUME)
+    fun onResume() {
         println("✓ [自定义观察者] 应用已准备就绪，开始加载资源...")
     }
 
-    @OnLifecycleEvent(value = "ON_MENU_SELECTION")
-    fun onMenuSelection() {
-        println("✓ [自定义观察者] 用户进入菜单，记录交互事件...")
-    }
-
-    @OnLifecycleEvent(value = "ON_COMMAND_EXECUTION_START")
-    fun onCommandStart() {
-        println("✓ [自定义观察者] 命令开始执行，开启性能计时...")
-    }
-
-    @OnLifecycleEvent(value = "ON_DESTROY")
+    @OnLifecycleEvent(Lifecycle.Event.ON_DESTROY)
     fun onDestroy() {
         println("✓ [自定义观察者] 应用销毁，释放资源和保存状态...")
+    }
+}
+
+/**
+ * 业务事件监听示例
+ */
+class BusinessEventObserver {
+
+    suspend fun observe(owner: CLILifecycleOwner) {
+        owner.eventFlow.collect { event ->
+            when (event) {
+                CLILifecycleEvent.ON_MENU_SELECTION -> println("🔸 进入菜单")
+                CLILifecycleEvent.ON_COMMAND_EXECUTION_START -> println("🔸 开始执行命令")
+                CLILifecycleEvent.ON_COMMAND_EXECUTION_PROGRESS -> println("🔸 命令进度更新")
+                CLILifecycleEvent.ON_COMMAND_EXECUTION_FINISH -> println("🔸 命令执行结束")
+                CLILifecycleEvent.ON_FAILED -> println("🔸 应用失败")
+                else -> {}
+            }
+        }
     }
 }
 

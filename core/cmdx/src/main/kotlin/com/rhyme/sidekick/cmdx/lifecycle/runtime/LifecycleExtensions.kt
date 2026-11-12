@@ -72,7 +72,7 @@ inline fun <S : Any> LifecycleOwner<S>.onState(
 /**
  * 监听生命周期状态变化
  */
-fun <S : Any> LifecycleOwner<S>.observeState(
+fun <S : Any> LifecycleOwner<S>.observeStates(
     coroutineScope: CoroutineScope,
     block: suspend (S) -> Unit
 ) {

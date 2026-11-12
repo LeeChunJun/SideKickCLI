@@ -19,8 +19,8 @@ object LocalCLILifecycleOwer {
      * Associates a [LocalCLILifecycleOwer] key to a value in a call to
      * [CompositionLocalProvider].
      */
-    infix fun provides(viewModelStoreOwner: CLILifecycleOwner):
+    infix fun provides(lifecycleOwner: CLILifecycleOwner):
             ProvidedValue<CLILifecycleOwner> {
-        return LocalCLILifecycleOwer.provides(viewModelStoreOwner)
+        return LocalCLILifecycleOwer.provides(lifecycleOwner)
     }
 }
